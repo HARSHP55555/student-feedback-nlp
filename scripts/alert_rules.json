@@ -1,0 +1,7 @@
+{
+  "urgent_keywords": [
+    "harass", "abuse", "unsafe", "bully", "threat",
+    "discriminat", "violence", "assault", "blackmail", "suicide"
+  ],
+  "escalate_if_emotion": ["anger", "fear", "sadness"]
+}

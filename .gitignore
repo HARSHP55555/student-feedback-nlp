@@ -1,0 +1,19 @@
+# virtual envs
+venv/
+venv311/
+
+# python cache
+__pycache__/
+*.pyc
+
+# data & artifacts
+data/*.csv
+data/*.xlsx
+*.pkl
+*.joblib
+
+# streamlit
+.streamlit/
+
+# logs
+*.log

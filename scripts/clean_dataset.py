@@ -1,33 +1,33 @@
 # scripts/clean_dataset.py
-from pathlib import Path
 import pandas as pd
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-src = ROOT / "data" / "Student_feedback.csv"
-dst = ROOT / "data" / "labeled_feedback.csv"
+src = ROOT / "data" / "labeled_feedback.csv"
+dst = ROOT / "data" / "processed_feedback.csv"
 
-if not src.exists():
-    raise FileNotFoundError(f"❌ Dataset not found at: {src}")
+print(f"✅ Loading: {src}")
+df = pd.read_csv(src)
 
-# Read dataset
-df = pd.read_csv(src, encoding="utf-8")
-
-# ✅ For generated dataset, columns are already clean and readable
-# Just rename for consistency with rest of pipeline
+# Normalize columns
 df = df.rename(columns={
-    "feedback_text": "text",
-    "sentiment_label": "sentiment",
-    "topic": "topic",
-    "emotion_tag": "emotion"
+    "studentname": "student_name",
+    "studentid": "student_id",
+    "department": "department",
+    "coursename": "course_name",
+    "facultyname": "faculty_name",
+    "feedbacktext": "text",
+    "categorylabel": "topic",
+    "sentimentlabel": "sentiment",
+    "safetytext": "safety_text",
+    "safetyalertneeded": "safety_alert"
 })
 
-# Add ID column
+# Assign ID column
 df.insert(0, "id", range(1, len(df) + 1))
 
-# Save cleaned version
-df.to_csv(dst, index=False, encoding="utf-8")
-
-print(f"✅ Cleaned dataset saved -> {dst}")
-print("✅ Columns:", list(df.columns))
-print("✅ Sample:")
-print(df.head(5))
+# Save cleaned dataset
+df.to_csv(dst, index=False)
+print(f"✅ Cleaned and saved -> {dst}")
+print(f"✅ Columns: {list(df.columns)}")
+print(df.sample(5))

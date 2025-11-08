@@ -76,21 +76,27 @@ print(f"⚙️ Training on device: {device}")
 # ==============================
 # ✅ 5. TRAINING CONFIG
 # ==============================
+from transformers import TrainingArguments
+import torch
+
 def get_training_args(output_dir):
     return TrainingArguments(
         output_dir=output_dir,
-        evaluation_strategy="no",
+        eval_strategy="epoch",              # ✅ Updated name
+        save_strategy="epoch",              # ✅ Keep consistent with eval
         learning_rate=2e-5,
-        per_device_train_batch_size=16,
+        per_device_train_batch_size=8,      # ✅ Safer for Colab GPU (T4)
+        per_device_eval_batch_size=8,
         num_train_epochs=3,
         weight_decay=0.01,
-        fp16=torch.cuda.is_available(),  # Use mixed precision on GPU
+        fp16=torch.cuda.is_available(),     # ✅ Enable mixed precision if GPU
         logging_dir=f"{output_dir}/logs",
         logging_steps=100,
         save_total_limit=2,
-        save_strategy="epoch",
-        report_to="none",
+        load_best_model_at_end=True,
+        report_to="none",                   # Disable WandB etc.
     )
+
 
 # ==============================
 # ✅ 6. TRAIN TOPIC MODEL

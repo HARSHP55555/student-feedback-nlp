@@ -1,96 +1,135 @@
 # scripts/train_bert_models.py
+"""
+Train two BERT models:
+1️⃣ Topic classification (Academic / Instructor / Infrastructure)
+2️⃣ Sentiment classification (Positive / Neutral / Negative)
+Optimized for Colab GPU (Tesla T4 / A100)
+"""
 
 import pandas as pd
 from datasets import Dataset
 from transformers import (
-    BertTokenizerFast,
-    BertForSequenceClassification,
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
     Trainer,
-    TrainingArguments
+    TrainingArguments,
+    DataCollatorWithPadding,
 )
+from sklearn.preprocessing import LabelEncoder
 import torch
-from sklearn.model_selection import train_test_split
-from tqdm import tqdm
+import os
 
-# ------------------------
-# 1️⃣ Load your cleaned data
-# ------------------------
-df = pd.read_csv("data/labeled_feedback.csv")
+# ==============================
+# ✅ 1. LOAD DATA
+# ==============================
+DATA_PATH = "data/labeled_feedback.csv"
+print(f"📂 Loading dataset from: {DATA_PATH}")
 
-# For both topic classification & sentiment classification
-topic_labels = sorted(df["topic"].unique())
-sentiment_labels = sorted(df["sentiment"].unique())
+df = pd.read_csv(DATA_PATH)
+df = df.dropna(subset=["feedbacktext", "categorylabel", "sentimentlabel"])
+print("✅ Columns:", df.columns.tolist())
+print("✅ Sample:\n", df.head(2))
 
-topic_label2id = {label: i for i, label in enumerate(topic_labels)}
-sentiment_label2id = {label: i for i, label in enumerate(sentiment_labels)}
+# ==============================
+# ✅ 2. ENCODE LABELS
+# ==============================
+topic_encoder = LabelEncoder()
+sentiment_encoder = LabelEncoder()
 
-# ------------------------
-# 2️⃣ Prepare tokenizer
-# ------------------------
-tokenizer = BertTokenizerFast.from_pretrained("bert-base-uncased")
+df["topic_label"] = topic_encoder.fit_transform(df["categorylabel"])
+df["sentiment_label"] = sentiment_encoder.fit_transform(df["sentimentlabel"])
 
-def tokenize(batch):
+# Save encoders for backend decoding later
+os.makedirs("models", exist_ok=True)
+pd.Series(topic_encoder.classes_).to_csv("models/topic_labels.csv", index=False)
+pd.Series(sentiment_encoder.classes_).to_csv("models/sentiment_labels.csv", index=False)
+
+# ==============================
+# ✅ 3. TOKENIZER
+# ==============================
+MODEL_NAME = "bert-base-uncased"
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+
+def tokenize_fn(examples):
     return tokenizer(
-        batch["text"], padding="max_length", truncation=True, max_length=128
+        examples["feedbacktext"],
+        truncation=True,
+        padding=False,
+        max_length=128,
     )
 
-# ------------------------
-# 3️⃣ Split and convert to Dataset
-# ------------------------
-def prepare_dataset(label_column, label_map):
-    df_local = df.copy()
-    df_local["label"] = df_local[label_column].map(label_map)
-    train_df, test_df = train_test_split(df_local, test_size=0.2, random_state=42)
+# Create Hugging Face Datasets
+topic_ds = Dataset.from_pandas(df[["feedbacktext", "topic_label"]])
+sentiment_ds = Dataset.from_pandas(df[["feedbacktext", "sentiment_label"]])
 
-    train_ds = Dataset.from_pandas(train_df[["text", "label"]])
-    test_ds = Dataset.from_pandas(test_df[["text", "label"]])
+topic_ds = topic_ds.map(tokenize_fn, batched=True)
+sentiment_ds = sentiment_ds.map(tokenize_fn, batched=True)
 
-    train_ds = train_ds.map(tokenize, batched=True)
-    test_ds = test_ds.map(tokenize, batched=True)
+data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
-    return train_ds, test_ds
+# ==============================
+# ✅ 4. GPU CHECK
+# ==============================
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"⚙️ Training on device: {device}")
 
-train_topic, test_topic = prepare_dataset("topic", topic_label2id)
-train_sent, test_sent = prepare_dataset("sentiment", sentiment_label2id)
-
-# ------------------------
-# 4️⃣ Initialize model
-# ------------------------
-def train_model(name, num_labels, train_ds, test_ds):
-    model = BertForSequenceClassification.from_pretrained(
-        "bert-base-uncased", num_labels=num_labels
-    )
-
-    args = TrainingArguments(
-        output_dir=f"models/{name}_bert",
+# ==============================
+# ✅ 5. TRAINING CONFIG
+# ==============================
+def get_training_args(output_dir):
+    return TrainingArguments(
+        output_dir=output_dir,
+        evaluation_strategy="no",
         learning_rate=2e-5,
-        per_device_train_batch_size=8,
-        per_device_eval_batch_size=8,
+        per_device_train_batch_size=16,
         num_train_epochs=3,
         weight_decay=0.01,
-        evaluation_strategy="epoch",
-        logging_dir=f"logs/{name}",
+        fp16=torch.cuda.is_available(),  # Use mixed precision on GPU
+        logging_dir=f"{output_dir}/logs",
+        logging_steps=100,
+        save_total_limit=2,
         save_strategy="epoch",
-        push_to_hub=False,
+        report_to="none",
     )
 
-    trainer = Trainer(
-        model=model,
-        args=args,
-        train_dataset=train_ds,
-        eval_dataset=test_ds,
-        tokenizer=tokenizer,
-    )
+# ==============================
+# ✅ 6. TRAIN TOPIC MODEL
+# ==============================
+print("\n🚀 Training BERT for TOPIC classification...")
+topic_model = AutoModelForSequenceClassification.from_pretrained(
+    MODEL_NAME, num_labels=len(topic_encoder.classes_)
+).to(device)
 
-    trainer.train()
-    trainer.save_model(f"models/{name}_bert")
-    print(f"✅ Saved model: models/{name}_bert")
+trainer_topic = Trainer(
+    model=topic_model,
+    args=get_training_args("models/bert_topic"),
+    train_dataset=topic_ds,
+    tokenizer=tokenizer,
+    data_collator=data_collator,
+)
 
-# ------------------------
-# 5️⃣ Train both models
-# ------------------------
-print("🚀 Training Topic Classification Model...")
-train_model("topic", len(topic_labels), train_topic, test_topic)
+trainer_topic.train()
+trainer_topic.save_model("models/bert_topic")
+print("✅ Saved topic model -> models/bert_topic")
 
-print("🚀 Training Sentiment Classification Model...")
-train_model("sentiment", len(sentiment_labels), train_sent, test_sent)
+# ==============================
+# ✅ 7. TRAIN SENTIMENT MODEL
+# ==============================
+print("\n🚀 Training BERT for SENTIMENT classification...")
+sentiment_model = AutoModelForSequenceClassification.from_pretrained(
+    MODEL_NAME, num_labels=len(sentiment_encoder.classes_)
+).to(device)
+
+trainer_sentiment = Trainer(
+    model=sentiment_model,
+    args=get_training_args("models/bert_sentiment"),
+    train_dataset=sentiment_ds,
+    tokenizer=tokenizer,
+    data_collator=data_collator,
+)
+
+trainer_sentiment.train()
+trainer_sentiment.save_model("models/bert_sentiment")
+print("✅ Saved sentiment model -> models/bert_sentiment")
+
+print("\n🎯 Training completed successfully!")
